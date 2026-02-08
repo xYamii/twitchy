@@ -1,0 +1,28 @@
+[package]
+name = "twitchy"
+version = "0.1.0"
+edition = "2021"
+authors = ["Jeff"]
+description = "Async Twitch chat client using EventSub WebSocket and Helix API"
+license = "MIT OR Apache-2.0"
+keywords = ["twitch", "chat", "eventsub", "bot", "streaming"]
+categories = ["api-bindings", "asynchronous", "web-programming::websocket"]
+readme = "README.md"
+
+[dependencies]
+tokio = { version = "1.47", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+futures-util = "0.3"
+log = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1.47", features = ["full", "test-util"] }
+
+[features]
+default = ["full"]
+full = ["moderation", "eventsub"]
+moderation = []
+eventsub = []
