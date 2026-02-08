@@ -20,8 +20,16 @@ pub enum TwitchClientEvent {
     /// Chat event received
     ChatEvent(TwitchEvent),
 
-    /// Tokens were refreshed (access_token, refresh_token)
+    /// Tokens were refreshed automatically (access_token, refresh_token)
+    ///
+    /// Save these tokens for future use
     TokensRefreshed(String, String),
+
+    /// Token has expired and needs to be refreshed manually
+    ///
+    /// This event is emitted when no client_secret is configured.
+    /// Use `TwitchClient::update_tokens()` to provide new tokens.
+    TokenExpired,
 
     /// Warning occurred (non-fatal)
     Warning(String),
@@ -112,6 +120,10 @@ impl TwitchClient {
             .set_token_refresh_notifier(token_refresh_tx.clone());
         self.eventsub.set_token_refresh_notifier(token_refresh_tx);
 
+        // Set up token expired notification channel
+        let (token_expired_tx, mut token_expired_rx) = tokio::sync::mpsc::unbounded_channel();
+        self.api.set_token_expired_notifier(token_expired_tx);
+
         // Spawn task to listen for token refresh events
         let event_tx_for_tokens = event_tx.clone();
         tokio::spawn(async move {
@@ -121,6 +133,16 @@ impl TwitchClient {
                         access_token,
                         refresh_token,
                     ))
+                    .await;
+            }
+        });
+
+        // Spawn task to listen for token expired events
+        let event_tx_for_expired = event_tx.clone();
+        tokio::spawn(async move {
+            while token_expired_rx.recv().await.is_some() {
+                let _ = event_tx_for_expired
+                    .send(TwitchClientEvent::TokenExpired)
                     .await;
             }
         });
@@ -455,6 +477,29 @@ impl TwitchClient {
         let access_token = self.api.get_access_token().await;
         let refresh_token = self.api.get_refresh_token().await;
         (access_token, refresh_token)
+    }
+
+    /// Update tokens manually
+    ///
+    /// Use this method when `client_secret` is not configured and you need to
+    /// provide new tokens after receiving a `TokenExpired` event.
+    ///
+    /// # Arguments
+    /// * `access_token` - New access token
+    /// * `refresh_token` - New refresh token
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use twitchy::TwitchClient;
+    /// # async fn example(client: &TwitchClient) {
+    /// // After receiving TokenExpired event, get new tokens from your service
+    /// let new_access = "new_access_token";
+    /// let new_refresh = "new_refresh_token";
+    /// client.update_tokens(new_access, new_refresh).await;
+    /// # }
+    /// ```
+    pub async fn update_tokens(&self, access_token: &str, refresh_token: &str) {
+        self.api.update_tokens(access_token, refresh_token).await;
     }
 
     /// Get the current connection state

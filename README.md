@@ -74,7 +74,11 @@ The library requires different OAuth scopes depending on which features you use:
 
 ## Configuration
 
-Use the builder pattern to configure your Twitch client:
+The library supports two authentication modes:
+
+### Option 1: Full Credentials (Automatic Token Refresh)
+
+Provide both `client_id` and `client_secret` for automatic token refresh:
 
 ```rust
 let config = TwitchConfig::builder()
@@ -83,6 +87,35 @@ let config = TwitchConfig::builder()
     .credentials("your_client_id", "your_client_secret")
     .build()?;
 ```
+
+When tokens expire, the library automatically refreshes them and emits a `TokensRefreshed` event with the new tokens. Save these for future use.
+
+### Option 2: External Token Management (Client ID Only)
+
+Provide only `client_id` when tokens are managed externally (e.g., through your OAuth service):
+
+```rust
+let config = TwitchConfig::builder()
+    .channel("your_channel_name")
+    .tokens("your_access_token", "your_refresh_token")
+    .client_id_only("your_client_id") // No client_secret needed
+    .build()?;
+```
+
+When tokens expire, the library emits a `TokenExpired` event. Fetch new tokens from your service and update them:
+
+```rust
+// In your event loop
+TwitchClientEvent::TokenExpired => {
+    // Get new tokens from your service
+    let (new_access, new_refresh) = fetch_tokens_from_your_api().await?;
+
+    // Update the client
+    client.update_tokens(&new_access, &new_refresh).await;
+}
+```
+
+This approach is ideal for distributing your app without exposing `client_secret`.
 
 ## Event Types
 
@@ -127,7 +160,8 @@ client.unban_user(user_id).await?;
 See the `examples/` directory for more complete examples:
 
 - `basic_chat.rs` - Simple bot that connects and prints chat messages
-- `moderation_bot.rs` - Bot demonstrating moderation features with automatic spam detection and mod commands
+- `moderation_bot.rs` - Bot with automatic spam detection and mod commands
+- `external_token_management.rs` - Using the library with external token management (no client_secret)
 
 ## Architecture
 

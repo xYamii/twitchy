@@ -115,6 +115,7 @@ pub struct TwitchApi {
     access_token: Arc<RwLock<String>>,
     refresh_token: Arc<RwLock<String>>,
     token_refresh_tx: Option<mpsc::UnboundedSender<(String, String)>>,
+    token_expired_tx: Option<mpsc::UnboundedSender<()>>,
 }
 
 impl TwitchApi {
@@ -130,12 +131,18 @@ impl TwitchApi {
             access_token: Arc::new(RwLock::new(access_token)),
             refresh_token: Arc::new(RwLock::new(refresh_token)),
             token_refresh_tx: None,
+            token_expired_tx: None,
         }
     }
 
     /// Set a channel to receive notifications when tokens are refreshed
     pub fn set_token_refresh_notifier(&mut self, tx: mpsc::UnboundedSender<(String, String)>) {
         self.token_refresh_tx = Some(tx);
+    }
+
+    /// Set a channel to receive notifications when token expires and cannot be auto-refreshed
+    pub fn set_token_expired_notifier(&mut self, tx: mpsc::UnboundedSender<()>) {
+        self.token_expired_tx = Some(tx);
     }
 
     /// Get the current access token
@@ -148,32 +155,59 @@ impl TwitchApi {
         self.refresh_token.read().await.clone()
     }
 
+    /// Update tokens manually
+    ///
+    /// Use this when tokens are managed externally (e.g., via a web service)
+    pub async fn update_tokens(&self, access_token: &str, refresh_token: &str) {
+        {
+            let mut token = self.access_token.write().await;
+            *token = access_token.to_string();
+        }
+        {
+            let mut token = self.refresh_token.write().await;
+            *token = refresh_token.to_string();
+        }
+    }
+
     /// Refresh the access token using the refresh token
     async fn refresh_token(&self) -> Result<()> {
         let current_refresh_token = self.refresh_token.read().await.clone();
 
-        let token_response =
-            auth::refresh_access_token(&current_refresh_token, &self.credentials).await?;
+        match auth::refresh_access_token(&current_refresh_token, &self.credentials).await {
+            Ok(token_response) => {
+                // Update both tokens
+                let new_access_token = token_response.access_token.clone();
+                let new_refresh_token = token_response.refresh_token.clone();
 
-        // Update both tokens
-        let new_access_token = token_response.access_token.clone();
-        let new_refresh_token = token_response.refresh_token.clone();
+                {
+                    let mut access_token = self.access_token.write().await;
+                    *access_token = new_access_token.clone();
+                }
+                {
+                    let mut refresh_token = self.refresh_token.write().await;
+                    *refresh_token = new_refresh_token.clone();
+                }
 
-        {
-            let mut access_token = self.access_token.write().await;
-            *access_token = new_access_token.clone();
+                // Notify listeners that tokens were refreshed
+                if let Some(tx) = &self.token_refresh_tx {
+                    let _ = tx.send((new_access_token, new_refresh_token));
+                }
+
+                Ok(())
+            }
+            Err(e) => {
+                // Check if error is due to missing client_secret
+                if let TwitchError::AuthError(ref msg) = e {
+                    if msg.contains("client_secret is required") {
+                        // Notify that token expired and needs manual refresh
+                        if let Some(tx) = &self.token_expired_tx {
+                            let _ = tx.send(());
+                        }
+                    }
+                }
+                Err(e)
+            }
         }
-        {
-            let mut refresh_token = self.refresh_token.write().await;
-            *refresh_token = new_refresh_token.clone();
-        }
-
-        // Notify listeners that tokens were refreshed
-        if let Some(tx) = &self.token_refresh_tx {
-            let _ = tx.send((new_access_token, new_refresh_token));
-        }
-
-        Ok(())
     }
 
     /// Get user information by login name

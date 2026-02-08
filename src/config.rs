@@ -5,16 +5,24 @@ use crate::error::{Result, TwitchError};
 pub struct TwitchCredentials {
     /// Twitch application client ID
     pub client_id: String,
-    /// Twitch application client secret
-    pub client_secret: String,
+    /// Twitch application client secret (optional - only needed for automatic token refresh)
+    pub client_secret: Option<String>,
 }
 
 impl TwitchCredentials {
-    /// Create new credentials
+    /// Create new credentials with client secret (enables automatic token refresh)
     pub fn new(client_id: impl Into<String>, client_secret: impl Into<String>) -> Self {
         Self {
             client_id: client_id.into(),
-            client_secret: client_secret.into(),
+            client_secret: Some(client_secret.into()),
+        }
+    }
+
+    /// Create new credentials with only client ID (no automatic token refresh)
+    pub fn new_without_secret(client_id: impl Into<String>) -> Self {
+        Self {
+            client_id: client_id.into(),
+            client_secret: None,
         }
     }
 }
@@ -79,7 +87,7 @@ impl TwitchConfigBuilder {
         self
     }
 
-    /// Set the Twitch application credentials
+    /// Set the Twitch application credentials with client secret (enables automatic token refresh)
     pub fn credentials(
         mut self,
         client_id: impl Into<String>,
@@ -87,6 +95,17 @@ impl TwitchConfigBuilder {
     ) -> Self {
         self.client_id = Some(client_id.into());
         self.client_secret = Some(client_secret.into());
+        self
+    }
+
+    /// Set only the client ID without client secret (disables automatic token refresh)
+    ///
+    /// Use this when tokens are managed externally (e.g., through a web service).
+    /// The library will emit a `TokenExpired` event when the token needs to be refreshed,
+    /// and you can update tokens manually using `TwitchClient::update_tokens()`.
+    pub fn client_id_only(mut self, client_id: impl Into<String>) -> Self {
+        self.client_id = Some(client_id.into());
+        self.client_secret = None;
         self
     }
 
@@ -111,17 +130,13 @@ impl TwitchConfigBuilder {
             .client_id
             .ok_or_else(|| TwitchError::ConfigError("client_id is required".to_string()))?;
 
-        let client_secret = self
-            .client_secret
-            .ok_or_else(|| TwitchError::ConfigError("client_secret is required".to_string()))?;
-
         Ok(TwitchConfig {
             channel_name,
             auth_token,
             refresh_token,
             credentials: TwitchCredentials {
                 client_id,
-                client_secret,
+                client_secret: self.client_secret,
             },
         })
     }

@@ -28,17 +28,29 @@ pub struct TokenResponse {
 /// # Returns
 /// A `TokenResponse` containing the new access token and refresh token
 ///
+/// # Errors
+/// Returns an error if `client_secret` is not provided or if the refresh request fails
+///
 /// # OAuth Scopes
 /// Uses the scopes that were originally granted to the refresh token
 pub async fn refresh_access_token(
     refresh_token: &str,
     credentials: &TwitchCredentials,
 ) -> Result<TokenResponse> {
+    let client_secret = credentials
+        .client_secret
+        .as_ref()
+        .ok_or_else(|| {
+            TwitchError::AuthError(
+                "client_secret is required for automatic token refresh".to_string(),
+            )
+        })?;
+
     let client = reqwest::Client::new();
 
     let params = [
         ("client_id", credentials.client_id.as_str()),
-        ("client_secret", credentials.client_secret.as_str()),
+        ("client_secret", client_secret.as_str()),
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token),
     ];
