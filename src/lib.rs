@@ -6,11 +6,17 @@
 //!
 //! - **EventSub WebSocket**: Real-time chat events using Twitch's EventSub WebSocket
 //! - **Helix API**: Send messages, moderate chat, and manage users
-//! - **Automatic Token Refresh**: OAuth tokens are automatically refreshed when expired
+//! - **Flexible Token Management**: Supports both automatic refresh (with client_secret) and manual/external token management (PKCE flow)
 //! - **Reconnection Handling**: Automatic reconnection with exponential backoff
 //! - **Type-Safe Events**: Strongly typed event structures for all Twitch events
 //!
 //! ## Quick Start
+//!
+//! ### Option 1: Using PKCE Flow (No Client Secret Required)
+//!
+//! This is ideal when you want users to authenticate through a web-based token generator
+//! without exposing your client secret. Tokens must be refreshed manually or through an
+//! external service.
 //!
 //! ```no_run
 //! use twitchy::{TwitchClient, TwitchConfig, TwitchClientEvent, TwitchEvent};
@@ -18,41 +24,67 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Configure the client
+//!     // Configure with only client_id (no client_secret)
+//!     let config = TwitchConfig::builder()
+//!         .channel("my_channel")
+//!         .tokens("access_token", "refresh_token")
+//!         .client_id_only("your_client_id") // PKCE flow - no secret needed!
+//!         .build()?;
+//!
+//!     let (tx, mut rx) = mpsc::channel(100);
+//!     let mut client = TwitchClient::new(config);
+//!     client.connect(tx).await?;
+//!
+//!     while let Some(event) = rx.recv().await {
+//!         match event {
+//!             TwitchClientEvent::Connected => println!("Connected!"),
+//!             TwitchClientEvent::ChatEvent(TwitchEvent::ChatMessage(msg)) => {
+//!                 println!("[{}]: {}", msg.chatter_user_name, msg.message.text);
+//!             }
+//!             TwitchClientEvent::TokenExpired => {
+//!                 // Refresh tokens through your service, then:
+//!                 // client.update_tokens("new_access", "new_refresh").await;
+//!             }
+//!             _ => {}
+//!         }
+//!     }
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ### Option 2: Automatic Token Refresh (With Client Secret)
+//!
+//! ```no_run
+//! use twitchy::{TwitchClient, TwitchConfig, TwitchClientEvent, TwitchEvent};
+//! use tokio::sync::mpsc;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Configure with client_secret for automatic refresh
 //!     let config = TwitchConfig::builder()
 //!         .channel("my_channel")
 //!         .tokens("access_token", "refresh_token")
 //!         .credentials("client_id", "client_secret")
 //!         .build()?;
 //!
-//!     // Create client and event channel
 //!     let (tx, mut rx) = mpsc::channel(100);
 //!     let mut client = TwitchClient::new(config);
-//!
-//!     // Connect to Twitch
 //!     client.connect(tx).await?;
 //!
-//!     // Listen for events
 //!     while let Some(event) = rx.recv().await {
 //!         match event {
-//!             TwitchClientEvent::Connected => {
-//!                 println!("Connected to Twitch!");
-//!             }
+//!             TwitchClientEvent::Connected => println!("Connected!"),
 //!             TwitchClientEvent::ChatEvent(TwitchEvent::ChatMessage(msg)) => {
 //!                 println!("[{}]: {}", msg.chatter_user_name, msg.message.text);
-//!
-//!                 // Reply to the message
 //!                 client.send_message("Hello from twitchy!").await?;
 //!             }
 //!             TwitchClientEvent::TokensRefreshed(access, refresh) => {
-//!                 println!("Tokens refreshed! Save these:");
-//!                 println!("Access: {}", access);
-//!                 println!("Refresh: {}", refresh);
+//!                 // Tokens auto-refreshed! Save them for next time.
+//!                 println!("Access: {}, Refresh: {}", access, refresh);
 //!             }
 //!             _ => {}
 //!         }
 //!     }
-//!
 //!     Ok(())
 //! }
 //! ```
@@ -108,3 +140,6 @@ pub use messages::{
 // Re-export commonly used types for convenience
 pub use api::{TwitchApi, UserData};
 pub use websocket::ConnectionState;
+
+// Re-export chrono types for timestamp handling
+pub use chrono::{DateTime, Utc};

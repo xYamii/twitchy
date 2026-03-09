@@ -1,4 +1,10 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+/// Helper function to set the current timestamp when deserializing
+fn now() -> DateTime<Utc> {
+    Utc::now()
+}
 
 /// WebSocket message received from Twitch EventSub
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -144,6 +150,9 @@ pub struct ChatMessageEvent {
     pub reply: Option<Reply>,
     /// Channel points reward ID (if message triggered a reward)
     pub channel_points_custom_reward_id: Option<String>,
+    /// RFC3339 timestamp of when this library received the message (not from Twitch API)
+    #[serde(skip_deserializing, default = "now")]
+    pub received_at: DateTime<Utc>,
 }
 
 impl ChatMessageEvent {

@@ -6,7 +6,7 @@ An async Rust library for building Twitch chat bots using EventSub WebSocket and
 
 - ✅ **EventSub WebSocket** - Real-time chat events using Twitch's EventSub WebSocket
 - ✅ **Helix API** - Send messages, moderate chat, and manage users
-- ✅ **Automatic Token Refresh** - OAuth tokens are automatically refreshed when expired
+- ✅ **Flexible Token Management** - Supports automatic refresh OR manual/external token management (PKCE flow)
 - ✅ **Reconnection Handling** - Automatic reconnection with exponential backoff
 - ✅ **Type-Safe Events** - Strongly typed event structures for all Twitch events
 - ✅ **Configurable** - Builder pattern for easy configuration
@@ -90,32 +90,35 @@ let config = TwitchConfig::builder()
 
 When tokens expire, the library automatically refreshes them and emits a `TokensRefreshed` event with the new tokens. Save these for future use.
 
-### Option 2: External Token Management (Client ID Only)
+### Option 2: PKCE Flow / External Token Management (Client ID Only)
 
-Provide only `client_id` when tokens are managed externally (e.g., through your OAuth service):
+Provide only `client_id` when using PKCE OAuth flow or external token management:
 
 ```rust
 let config = TwitchConfig::builder()
     .channel("your_channel_name")
     .tokens("your_access_token", "your_refresh_token")
-    .client_id_only("your_client_id") // No client_secret needed
+    .client_id_only("your_client_id") // No client_secret needed!
     .build()?;
 ```
 
-When tokens expire, the library emits a `TokenExpired` event. Fetch new tokens from your service and update them:
+**Perfect for:**
+- Using web-based token generators with PKCE flow
+- Distributing your app without exposing `client_secret`
+- Managing tokens through an external service/API
+
+When tokens expire, the library emits a `TokenExpired` event. Refresh tokens through your service and update them:
 
 ```rust
 // In your event loop
 TwitchClientEvent::TokenExpired => {
-    // Get new tokens from your service
-    let (new_access, new_refresh) = fetch_tokens_from_your_api().await?;
+    // Get new tokens from your token service/API
+    let (new_access, new_refresh) = fetch_tokens_from_your_service().await?;
 
     // Update the client
     client.update_tokens(&new_access, &new_refresh).await;
 }
 ```
-
-This approach is ideal for distributing your app without exposing `client_secret`.
 
 ## Event Types
 
