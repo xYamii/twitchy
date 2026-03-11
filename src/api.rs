@@ -203,6 +203,9 @@ impl TwitchApi {
                         if let Some(tx) = &self.token_expired_tx {
                             let _ = tx.send(());
                         }
+                        // Return Ok since we successfully notified about expiration
+                        // The app will handle refreshing tokens externally
+                        return Ok(());
                     }
                 }
                 Err(e)

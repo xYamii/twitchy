@@ -30,8 +30,8 @@ impl TwitchCredentials {
 /// Configuration for the Twitch client
 #[derive(Debug, Clone)]
 pub struct TwitchConfig {
-    /// The Twitch channel name to connect to
-    pub channel_name: String,
+    /// The Twitch channel name to connect to (optional for multi-channel setups)
+    pub channel_name: Option<String>,
     /// OAuth access token
     pub auth_token: String,
     /// OAuth refresh token
@@ -114,10 +114,6 @@ impl TwitchConfigBuilder {
     /// # Errors
     /// Returns a `ConfigError` if any required field is missing
     pub fn build(self) -> Result<TwitchConfig> {
-        let channel_name = self
-            .channel_name
-            .ok_or_else(|| TwitchError::ConfigError("channel_name is required".to_string()))?;
-
         let auth_token = self
             .auth_token
             .ok_or_else(|| TwitchError::ConfigError("auth_token is required".to_string()))?;
@@ -131,7 +127,7 @@ impl TwitchConfigBuilder {
             .ok_or_else(|| TwitchError::ConfigError("client_id is required".to_string()))?;
 
         Ok(TwitchConfig {
-            channel_name,
+            channel_name: self.channel_name,
             auth_token,
             refresh_token,
             credentials: TwitchCredentials {

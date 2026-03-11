@@ -517,4 +517,133 @@ impl EventSubManager {
 
         Ok((success_count, failed_count, warnings))
     }
+
+    /// Subscribe to events for a specific channel (for multi-channel support)
+    /// Returns (success_count, failed_count, warnings)
+    pub async fn subscribe_to_channel_events(
+        &self,
+        session_id: &str,
+        broadcaster_user_id: &str,
+        user_id: &str,
+    ) -> Result<(usize, usize, Vec<String>)> {
+        log::info!("Creating EventSub subscriptions for channel {}...", broadcaster_user_id);
+        let mut success_count = 0;
+        let mut failed_count = 0;
+        let mut warnings = Vec::new();
+
+        // Subscribe to all chat-related events for this specific channel
+        if self
+            .subscribe_with_error_handling(
+                "chat messages",
+                "channel.chat.message",
+                self.subscribe_to_chat_messages(session_id, broadcaster_user_id, user_id)
+                    .await,
+                &mut warnings,
+            )
+            .await
+        {
+            success_count += 1;
+        } else {
+            failed_count += 1;
+        }
+
+        if self
+            .subscribe_with_error_handling(
+                "message deletions",
+                "channel.chat.message_delete",
+                self.subscribe_to_message_delete(session_id, broadcaster_user_id, user_id)
+                    .await,
+                &mut warnings,
+            )
+            .await
+        {
+            success_count += 1;
+        } else {
+            failed_count += 1;
+        }
+
+        if self
+            .subscribe_with_error_handling(
+                "user message clears",
+                "channel.chat.clear_user_messages",
+                self.subscribe_to_clear_user_messages(session_id, broadcaster_user_id, user_id)
+                    .await,
+                &mut warnings,
+            )
+            .await
+        {
+            success_count += 1;
+        } else {
+            failed_count += 1;
+        }
+
+        if self
+            .subscribe_with_error_handling(
+                "chat clear",
+                "channel.chat.clear",
+                self.subscribe_to_chat_clear(session_id, broadcaster_user_id, user_id)
+                    .await,
+                &mut warnings,
+            )
+            .await
+        {
+            success_count += 1;
+        } else {
+            failed_count += 1;
+        }
+
+        if self
+            .subscribe_with_error_handling(
+                "chat settings updates",
+                "channel.chat_settings.update",
+                self.subscribe_to_chat_settings_update(session_id, broadcaster_user_id, user_id)
+                    .await,
+                &mut warnings,
+            )
+            .await
+        {
+            success_count += 1;
+        } else {
+            failed_count += 1;
+        }
+
+        if self
+            .subscribe_with_error_handling(
+                "channel bans",
+                "channel.ban",
+                self.subscribe_to_channel_ban(session_id, broadcaster_user_id)
+                    .await,
+                &mut warnings,
+            )
+            .await
+        {
+            success_count += 1;
+        } else {
+            failed_count += 1;
+        }
+
+        if self
+            .subscribe_with_error_handling(
+                "channel unbans",
+                "channel.unban",
+                self.subscribe_to_channel_unban(session_id, broadcaster_user_id)
+                    .await,
+                &mut warnings,
+            )
+            .await
+        {
+            success_count += 1;
+        } else {
+            failed_count += 1;
+        }
+
+        log::info!(
+            "Channel {} subscriptions: {} succeeded, {} failed/skipped",
+            broadcaster_user_id,
+            success_count,
+            failed_count
+        );
+
+        Ok((success_count, failed_count, warnings))
+    }
 }

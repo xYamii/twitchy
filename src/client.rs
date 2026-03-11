@@ -109,6 +109,150 @@ impl TwitchClient {
         }
     }
 
+    /// Connect to Twitch WebSocket without subscribing to any channels initially
+    ///
+    /// This is useful for multi-channel setups where you want to subscribe to
+    /// channels dynamically using `subscribe_to_channel()`.
+    pub async fn connect_without_subscriptions(
+        &mut self,
+        event_tx: tokio::sync::mpsc::Sender<TwitchClientEvent>,
+    ) -> Result<()> {
+        // Set up token expired notification channel
+        let (token_expired_tx, mut token_expired_rx) = tokio::sync::mpsc::unbounded_channel();
+        self.api.set_token_expired_notifier(token_expired_tx);
+
+        // Get bot user ID for later subscriptions
+        let bot_user = self.api.get_current_user().await?;
+        self.bot_user_id = Some(bot_user.id.clone());
+
+        // Create WebSocket handler
+        let ws_handler = WebSocketHandler::new();
+        let (ws_tx, mut ws_rx) = tokio::sync::mpsc::channel::<WebSocketMessage>(100);
+
+        // Spawn WebSocket connection task
+        let ws_task = {
+            let ws_tx_clone = ws_tx.clone();
+            let mut ws_handler_clone = ws_handler.clone();
+
+            tokio::spawn(async move {
+                if let Err(e) = ws_handler_clone.connect(ws_tx_clone).await {
+                    log::error!("WebSocket connection failed: {}", e);
+                }
+            })
+        };
+
+        self.ws_task = Some(ws_task);
+
+        // Wait for session ID
+        let _session_id = loop {
+            match ws_rx.recv().await {
+                Some(WebSocketMessage::SessionId(id)) => {
+                    break id;
+                }
+                Some(WebSocketMessage::Error(e)) => {
+                    return Err(TwitchError::WebSocketError(e));
+                }
+                None => {
+                    return Err(TwitchError::WebSocketError(
+                        "WebSocket channel closed".to_string(),
+                    ));
+                }
+                _ => {}
+            }
+        };
+
+        log::info!("WebSocket connected - ready to subscribe to channels");
+        let _ = event_tx.send(TwitchClientEvent::Connected).await;
+
+        // Spawn task to listen for token expired events
+        let event_tx_for_expired = event_tx.clone();
+        tokio::spawn(async move {
+            while token_expired_rx.recv().await.is_some() {
+                let _ = event_tx_for_expired
+                    .send(TwitchClientEvent::TokenExpired)
+                    .await;
+            }
+        });
+
+        // Spawn event processing task with reconnection handling
+        let event_tx_clone = event_tx.clone();
+        let ws_tx_clone = ws_tx.clone();
+        let mut reconnect_handler = ws_handler.clone();
+
+        tokio::spawn(async move {
+            while let Some(msg) = ws_rx.recv().await {
+                match msg {
+                    WebSocketMessage::Event(event) => {
+                        let _ = event_tx_clone
+                            .send(TwitchClientEvent::ChatEvent(event))
+                            .await;
+                    }
+                    WebSocketMessage::Disconnected => {
+                        let _ = event_tx_clone.send(TwitchClientEvent::Disconnected).await;
+
+                        // Attempt to reconnect with exponential backoff
+                        match reconnect_with_backoff(&mut reconnect_handler, ws_tx_clone.clone(), 5)
+                            .await
+                        {
+                            Ok(_) => {
+                                let _ = event_tx_clone.send(TwitchClientEvent::Connected).await;
+                            }
+                            Err(e) => {
+                                let _ = event_tx_clone
+                                    .send(TwitchClientEvent::Error(format!(
+                                        "Failed to reconnect: {}",
+                                        e
+                                    )))
+                                    .await;
+                                break;
+                            }
+                        }
+                    }
+                    WebSocketMessage::Error(e) => {
+                        let _ = event_tx_clone.send(TwitchClientEvent::Error(e)).await;
+                    }
+                    WebSocketMessage::Reconnect(url) => {
+                        reconnect_handler.set_url(url.clone());
+
+                        // Immediately reconnect to the new URL
+                        let ws_tx_reconnect = ws_tx_clone.clone();
+                        let mut handler_for_reconnect = reconnect_handler.clone();
+                        handler_for_reconnect.set_url(url);
+
+                        tokio::spawn(async move {
+                            if let Err(e) = handler_for_reconnect.connect(ws_tx_reconnect).await {
+                                log::error!("Failed to reconnect to new URL: {}", e);
+                            }
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        // Spawn keepalive monitoring task
+        let ws_handler_for_keepalive = ws_handler.clone();
+        let event_tx_keepalive = event_tx.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+
+                if ws_handler_for_keepalive.is_keepalive_timeout().await {
+                    let _ = event_tx_keepalive
+                        .send(TwitchClientEvent::Error(
+                            "Keepalive timeout - connection stale".to_string(),
+                        ))
+                        .await;
+                    break;
+                }
+            }
+        });
+
+        self.ws_handler = Some(ws_handler);
+
+        Ok(())
+    }
+
     /// Connect to Twitch and start receiving events
     pub async fn connect(
         &mut self,
@@ -147,9 +291,15 @@ impl TwitchClient {
             }
         });
 
+        let channel_name = self
+            .config
+            .channel_name
+            .as_ref()
+            .ok_or_else(|| TwitchError::ConfigError("channel_name is required for connect()".to_string()))?;
+
         let broadcaster = self
             .api
-            .get_user_by_login(&self.config.channel_name)
+            .get_user_by_login(channel_name)
             .await?;
         let bot_user = self.api.get_current_user().await?;
 
@@ -533,6 +683,64 @@ impl TwitchClient {
     /// Get a reference to the API client
     pub fn api(&self) -> &TwitchApi {
         &self.api
+    }
+
+    /// Get the session ID for the current WebSocket connection
+    pub async fn session_id(&self) -> Option<String> {
+        match self.ws_handler.as_ref() {
+            Some(handler) => handler.session_id().await,
+            None => None,
+        }
+    }
+
+    /// Subscribe to events for an additional channel (for multi-channel support)
+    ///
+    /// This allows you to add subscriptions for additional channels without creating
+    /// a new WebSocket connection. All channels will share the same connection.
+    ///
+    /// # Arguments
+    /// * `channel_name` - The channel name to subscribe to (e.g., "ninja")
+    ///
+    /// # Returns
+    /// * `Result<String>` - The broadcaster_user_id for the channel
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use twitchy::TwitchClient;
+    /// # async fn example(client: &TwitchClient) -> Result<(), Box<dyn std::error::Error>> {
+    /// let broadcaster_id = client.subscribe_to_channel("ninja").await?;
+    /// println!("Subscribed to channel with ID: {}", broadcaster_id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn subscribe_to_channel(&self, channel_name: &str) -> Result<String> {
+        let session_id = self
+            .session_id().await
+            .ok_or_else(|| TwitchError::ConfigError("Not connected".to_string()))?;
+
+        let bot_user_id = self
+            .bot_user_id
+            .as_ref()
+            .ok_or_else(|| TwitchError::ConfigError("Not connected".to_string()))?;
+
+        // Get broadcaster info
+        let broadcaster = self.api.get_user_by_login(channel_name).await?;
+
+        // Subscribe to events for this channel
+        let (success_count, _failed_count, warnings) = self
+            .eventsub
+            .subscribe_to_channel_events(&session_id, &broadcaster.id, bot_user_id)
+            .await?;
+
+        if success_count == 0 {
+            return Err(TwitchError::SubscriptionError(format!(
+                "Failed to subscribe to channel '{}': {}",
+                channel_name,
+                warnings.join(", ")
+            )));
+        }
+
+        Ok(broadcaster.id)
     }
 }
 

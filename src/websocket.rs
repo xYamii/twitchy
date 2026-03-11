@@ -37,6 +37,7 @@ pub enum WebSocketMessage {
 struct SharedState {
     last_message_time: Arc<RwLock<Instant>>,
     keepalive_timeout: Arc<RwLock<Duration>>,
+    session_id: Arc<RwLock<Option<String>>>,
 }
 
 /// WebSocket connection handler for Twitch EventSub
@@ -44,7 +45,6 @@ struct SharedState {
 pub struct WebSocketHandler {
     url: String,
     state: ConnectionState,
-    session_id: Option<String>,
     shared: SharedState,
 }
 
@@ -54,10 +54,10 @@ impl WebSocketHandler {
         Self {
             url: EVENTSUB_WS_URL.to_string(),
             state: ConnectionState::Disconnected,
-            session_id: None,
             shared: SharedState {
                 last_message_time: Arc::new(RwLock::new(Instant::now())),
                 keepalive_timeout: Arc::new(RwLock::new(Duration::from_secs(10))),
+                session_id: Arc::new(RwLock::new(None)),
             },
         }
     }
@@ -148,7 +148,7 @@ impl WebSocketHandler {
 
         match message.payload {
             Payload::Welcome(welcome) => {
-                self.session_id = Some(welcome.session.id.clone());
+                *self.shared.session_id.write().await = Some(welcome.session.id.clone());
                 *self.shared.keepalive_timeout.write().await =
                     Duration::from_secs(welcome.session.keepalive_timeout_seconds);
 
@@ -229,9 +229,8 @@ impl WebSocketHandler {
     }
 
     /// Get the current session ID
-    #[allow(dead_code)] // Reserved for future WebSocket session management
-    pub fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+    pub async fn session_id(&self) -> Option<String> {
+        self.shared.session_id.read().await.clone()
     }
 
     /// Get the current connection state
